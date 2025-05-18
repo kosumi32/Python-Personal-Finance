@@ -7,7 +7,7 @@ import plotly.express as px
 st.set_page_config(page_title="Finance App", page_icon="💰", layout="wide")
 
 # Streamlit has states, everytime do anything, 
-# We're going to lose anything that we dont eexplicitly store in state
+# We're going to lose anything that we dont explicitly store in state
 
 category_file= "categories.json"
 log_file= "log.json"
@@ -23,9 +23,15 @@ if os.path.exists(category_file):
     with open(category_file, "r") as f:
         st.session_state.categories = json.load(f)
 
-if os.path.exists(log_file):
+
+if "matched" not in st.session_state:
+    st.session_state.matched = {cat: [] for cat in st.session_state.categories}
+elif os.path.exists(log_file):
     with open(log_file, "r") as f:
-        st.session_state.matched = json.load(f)
+        try:
+            st.session_state.matched = json.load(f)
+        except json.JSONDecodeError:
+            st.session_state.matched = {cat: [] for cat in st.session_state.categories}
 
 def save_categories():
     with open(category_file, "w") as f:
@@ -40,14 +46,9 @@ def categorize_transaction(df):
     if "Details" not in df.columns:
         st.warning("The uploaded file does not contain a 'Details' column.")
         return df
-
-    # Ensure the matched dictionary exists and is clean
-    if "matched" not in st.session_state:
-        st.session_state.matched = {cat: [] for cat in st.session_state.categories}
-    else:
-        # Reset matched results for each run
-        for cat in st.session_state.matched:
-            st.session_state.matched[cat] = []
+    
+    # Reinitialize matched properly with all categories present
+    st.session_state.matched = {cat: [] for cat in st.session_state.categories}
 
     # new category col with default val
     df["Category"]= "Uncategorized"
@@ -62,19 +63,19 @@ def categorize_transaction(df):
 
         # Match keywords for each category
         for idx, row in df.iterrows():
-            detail= row["Details"].lower()
-            if any(keyword in detail for keyword in lowered_keywords):
+            detail= row["Details"].lower().strip()
+            if detail in lowered_keywords:
                 df.loc[idx, "Category"]= category
                 
                 # Log the matched detail (not in keyword list)
                 st.session_state.matched[category].append(detail)
-                break   # Gets the first match
+                # break   # Gets the first match
 
     save_log()
     return df
 
 def add_keyword_to_category(category, keyword):
-    keyword = keyword.strip().lower()
+    keyword = keyword.strip()
     if keyword and keyword not in st.session_state.categories[category]:
         st.session_state.categories[category].append(keyword)
         save_categories()
@@ -83,7 +84,7 @@ def add_keyword_to_category(category, keyword):
     return False
 
 
-def load_transcaction(file):
+def load_transaction(file):
     try:
         df = pd.read_csv(file)
 
@@ -104,7 +105,7 @@ def main():
     uploaded_file = st.file_uploader("Upload your transcation data (CSV)", type=["csv"])
 
     if uploaded_file is not None:
-        df = load_transcaction(uploaded_file)
+        df = load_transaction(uploaded_file)
 
         if df is not None:
             # New DF only for debits and credits
@@ -128,7 +129,6 @@ def main():
                         st.warning(f"Category '{new_category}' already exists!")
 
                 st.subheader("Expenses (Debits)")
-                # st.write(debits_df.head(10))
 
                 edited_df= st.data_editor(
                     st.session_state.debits_df[["Date", "Details", "Amount", "Category"]],
@@ -155,17 +155,24 @@ def main():
                         st.session_state.debits_df.loc[idx, "Category"]= new_category
                         add_keyword_to_category(new_category, details)
 
+                # Expense Summary by Category
+                st.subheader("Expense Summary by Category")
+                category_totals= st.session_state.debits_df.groupby("Category")["Amount"].sum().reset_index()
+                category_totals= category_totals.sort_values(by="Amount", ascending=False)
+
+                st.dataframe(category_totals, column_config={
+                    "Amount": st.column_config.NumberColumn("Amount", format="%.2f $"),
+                }, use_container_width=True, hide_index=True)
+
                 # Plotting
-                fig = px.pie(debits_df, values='Amount', names='Debit/Credit', title='Expenses by Category')
-                st.plotly_chart(fig)
+                fig = px.pie(category_totals, values='Amount', names='Category', title='Expenses by Category')
+                st.plotly_chart(fig, use_container_width=True)
 
             with tab2:
-                st.subheader("Payments (Credits)")
-                st.write(credits_df.head(10))
-
-                # Plotting
-                fig = px.pie(credits_df, values='Amount', names='Debit/Credit', title='Payments by Category')
-                st.plotly_chart(fig)
+                st.subheader("Payments Summary")
+                total_payments = credits_df["Amount"].sum()
+                st.metric("Total Payments", f"{total_payments:,.2f} $")
+                st.write(credits_df)
 
 
 
